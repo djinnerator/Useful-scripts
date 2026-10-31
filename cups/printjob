@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+INTERACTIVE_OPTS=false
+POSITIONAL_ARGS=()
+LP_OPTS=()
+
+# Parse flags and positional arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o|--options)
+            INTERACTIVE_OPTS=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [-o|--options] [[printer_name] <filename>]"
+            exit 0
+            ;;
+        -*)
+            echo "Error: Unknown option '$1'" >&2
+            echo "Usage: $0 [-o|--options] [[printer_name] <filename>]" >&2
+            exit 1
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Validate argument count (must be 0, 1, or 2 positional arguments)
+ARG_COUNT=${#POSITIONAL_ARGS[@]}
+if [[ $ARG_COUNT -eq 0 ]]; then
+    PRINTER=""
+    FILENAME=""
+elif [[ $ARG_COUNT -eq 1 ]]; then
+    PRINTER=""
+    FILENAME="${POSITIONAL_ARGS[0]}"
+elif [[ $ARG_COUNT -eq 2 ]]; then
+    PRINTER="${POSITIONAL_ARGS[0]}"
+    FILENAME="${POSITIONAL_ARGS[1]}"
+else
+    echo "Error: Expected 0, 1, or 2 positional arguments, got $ARG_COUNT." >&2
+    echo "Usage: $0 [-o|--options] [[printer_name] <filename>]" >&2
+    exit 1
+fi
+
+# If a filename was passed via command line, verify it exists and is readable right away
+if [[ -n "$FILENAME" && ( ! -f "$FILENAME" || ! -r "$FILENAME" ) ]]; then
+    echo "Error: File '$FILENAME' does not exist or is not readable." >&2
+    exit 1
+fi
+
+# 1. If no printer was specified, query available printers and prompt the user
+if [[ -z "$PRINTER" ]]; then
+    mapfile -t PRINTERS < <(lpstat -e 2>/dev/null)
+
+    if [[ ${#PRINTERS[@]} -eq 0 ]]; then
+        echo "Error: No printers found via lpstat." >&2
+        exit 1
+    fi
+
+    echo "Available printers:"
+    PS3="Select a printer (enter number): "
+    select SELECTED_PRINTER in "${PRINTERS[@]}"; do
+        if [[ -n "$SELECTED_PRINTER" ]]; then
+            PRINTER="$SELECTED_PRINTER"
+            break
+        else
+            echo "Invalid selection. Please try again."
+        fi
+    done
+fi
+
+# 2. If no filename was specified, list files in the current directory and prompt the user
+if [[ -z "$FILENAME" ]]; then
+    FILES=()
+    shopt -s nullglob
+    for f in *; do
+        if [[ -f "$f" && -r "$f" ]]; then
+            FILES+=("$f")
+        fi
+    done
+    shopt -u nullglob
+
+    if [[ ${#FILES[@]} -eq 0 ]]; then
+        echo "Error: No readable files found in the current directory ($(pwd))." >&2
+        exit 1
+    fi
+
+    echo ""
+    echo "Available files in $(pwd):"
+    PS3="Select a file to print (enter number): "
+    select SELECTED_FILE in "${FILES[@]}"; do
+        if [[ -n "$SELECTED_FILE" ]]; then
+            FILENAME="$SELECTED_FILE"
+            break
+        else
+            echo "Invalid selection. Please try again."
+        fi
+    done
+fi
+
+# Prompt for print options if -o or --options was passed
+if [[ "$INTERACTIVE_OPTS" == true ]]; then
+    echo ""
+    echo "--- Configure Print Options ---"
+
+    # 1. Number of copies
+    while true; do
+        read -r -p "Number of copies (press Enter for 1): " COPIES_ANS
+        if [[ -z "$COPIES_ANS" ]]; then
+            break
+        elif [[ "$COPIES_ANS" =~ ^[1-9][0-9]*$ ]]; then
+            LP_OPTS+=(-n "$COPIES_ANS")
+            break
+        else
+            echo "Invalid input. Please enter a positive whole number."
+        fi
+    done
+
+    # 2. Paper size (media) dynamically queried via lpoptions
+    read -r -p "Change paper size from printer default? (y/N): " CHANGE_MEDIA_ANS
+    if [[ "$CHANGE_MEDIA_ANS" =~ ^[Yy]$ ]]; then
+        PAGESIZE_LINE=$(lpoptions -p "$PRINTER" -l 2>/dev/null | grep -E '^(PageSize|Media)/' | head -n 1 || true)
+
+        if [[ -n "$PAGESIZE_LINE" ]]; then
+            # Strip the option label prefix (e.g., "PageSize/Page Size: ")
+            SIZES_RAW="${PAGESIZE_LINE#*: }"
+            read -r -a MEDIA_SIZES <<< "$SIZES_RAW"
+
+            echo "Supported paper sizes (* indicates current printer default):"
+            PS3="Select paper size (enter number): "
+            select SELECTED_MEDIA in "${MEDIA_SIZES[@]}"; do
+                if [[ -n "$SELECTED_MEDIA" ]]; then
+                    # Remove leading asterisk if the user picked the default item
+                    CLEAN_MEDIA="${SELECTED_MEDIA#\*}"
+                    LP_OPTS+=(-o "media=$CLEAN_MEDIA")
+                    break
+                else
+                    echo "Invalid selection. Please try again."
+                fi
+            done
+        else
+            read -r -p "Could not query printer sizes. Enter paper size manually (e.g., Letter, A4): " MEDIA_ANS
+            if [[ -n "${MEDIA_ANS// /}" ]]; then
+                LP_OPTS+=(-o "media=${MEDIA_ANS// /}")
+            fi
+        fi
+    fi
+
+    # 3. Two-sided (duplex) printing
+    read -r -p "Enable two-sided (duplex) printing? (y/N): " DUPLEX_ANS
+    if [[ "$DUPLEX_ANS" =~ ^[Yy]$ ]]; then
+        read -r -p "Bind on (l)ong edge or (s)hort edge? [L/s]: " EDGE_ANS
+        if [[ "$EDGE_ANS" =~ ^[Ss]$ ]]; then
+            LP_OPTS+=(-o "sides=two-sided-short-edge")
+        else
+            LP_OPTS+=(-o "sides=two-sided-long-edge")
+        fi
+    fi
+
+    # 4. Landscape printing
+    read -r -p "Enable landscape orientation? (y/N): " LANDSCAPE_ANS
+    if [[ "$LANDSCAPE_ANS" =~ ^[Yy]$ ]]; then
+        LP_OPTS+=(-o "landscape")
+    fi
+
+    # 5. Specific page ranges
+    read -r -p "Specify page ranges (e.g., 1-4,7,9-12) or press Enter for all: " PAGES_ANS
+    if [[ -n "${PAGES_ANS// /}" ]]; then
+        LP_OPTS+=(-o "page-ranges=${PAGES_ANS// /}")
+    fi
+
+    # 6. Fit-to-page
+    read -r -p "Scale document to fit page? (y/N): " FIT_ANS
+    if [[ "$FIT_ANS" =~ ^[Yy]$ ]]; then
+        LP_OPTS+=(-o "fit-to-page")
+    fi
+fi
+
+# Display summary and prompt for confirmation
+echo ""
+echo "=== Print Job Summary ==="
+echo "File:    $FILENAME"
+echo "Printer: $PRINTER"
+if [[ ${#LP_OPTS[@]} -gt 0 ]]; then
+    echo "Options: ${LP_OPTS[*]}"
+else
+    echo "Options: Default printer settings"
+fi
+echo "========================="
+
+read -r -p "Send this job to the printer? (y/N): " CONFIRM_ANS
+if [[ ! "$CONFIRM_ANS" =~ ^[Yy]$ ]]; then
+    echo "Print job cancelled."
+    exit 0
+fi
+
+# Execute the print job and capture output
+echo "Sending '$FILENAME' to printer '$PRINTER'..."
+LP_OUTPUT=$(lp -d "$PRINTER" "${LP_OPTS[@]}" -- "$FILENAME")
+echo "$LP_OUTPUT"
+
+# Extract the Job ID from lp output (e.g., "request id is Printer_Name-42 (1 file(s))")
+JOB_ID=""
+if [[ "$LP_OUTPUT" =~ request\ id\ is\ ([^[:space:]]+) ]]; then
+    JOB_ID="${BASH_REMATCH[1]}"
+    echo "Captured Job ID: $JOB_ID"
+else
+    echo "Warning: Could not parse Job ID from lp output." >&2
+fi
+
+# Display current print queue status for the printer
+echo ""
+echo "=== Print Queue Status ($PRINTER) ==="
+lpstat -p "$PRINTER" 2>/dev/null || true
+
+QUEUE_OUTPUT=$(lpstat -o "$PRINTER" 2>/dev/null || true)
+if [[ -n "$QUEUE_OUTPUT" ]]; then
+    echo "$QUEUE_OUTPUT"
+else
+    echo "No active jobs in queue (job ${JOB_ID:-unknown} may have already completed)."
+fi
+echo "====================================="
