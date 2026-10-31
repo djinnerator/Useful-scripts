@@ -1,0 +1,38 @@
+tar xf Jetson_Linux_R39.2.1_aarch64.tbz2 && sudo tar jxpf Tegra_Linux_Sample-Root-Filesystem_R39.2.1_aarch64.tbz2 -C Linux_for_Tegra/rootfs/ && tar xf public_sources.tbz2 && tar xf host_overlay_fskp_tools_R39.2.1_aarch64.tbz2 && tar xf Linux_for_Tegra/source/nvidia-jetson-optee-source.tbz2 -C Linux_for_Tegra/source
+
+cd Linux_for_Tegra
+
+sudo ./tools/l4t_flash_prerequisites.sh
+
+sudo ./apply_binaries.sh
+
+sudo ./l4t_initrd_flash.sh --showlogs --no-flash --network usb0 -u ../jetson-fuses/rsa_priv.pem -v ../jetson-fuses/sbk.key --uefi-keys uefi_keys/uefi_keys.conf --uefi-enc ../jetson-fuses/sym_t234.key -p "-c bootloader/generic/cfg/flash_t234_qspi.xml" jetson-orin-nano-devkit-super internal
+
+sudo ./tools/l4t_create_default_user.sh -u djinn -p patrick13579 -n jetson-orin --accept-license
+
+sudo cp bootloader/eks_t234_sigheader_encrypt.img.signed tools/kernel_flash/images/internal/
+
+For 1TB:
+
+sudo ROOTFS_ENC=1 EXT_NUM_SECTORS=1953525168 ./tools/kernel_flash/l4t_initrd_flash.sh --showlogs -u ../jetson-fuses/rsa_priv.pem -v ../jetson-fuses/sbk.key --no-flash --external-device nvme0n1p1 -i ../jetson-fuses/sym2_t234.key -c ./tools/kernel_flash/flash_l4t_t234_nvme_rootfs_enc.xml -S 850GiB --external-only --append --network usb0 jetson-orin-nano-devkit-super external
+
+sudo ROOTFS_ENC=1 EXT_NUM_SECTORS=1953525168 ./tools/kernel_flash/l4t_initrd_flash.sh --showlogs -u ../jetson-fuses/rsa_priv.pem -v ../jetson-fuses/sbk.key --uefi-keys uefi_keys/uefi_keys.conf --uefi-enc ../jetson-fuses/sym_t234.key --no-flash --external-device nvme0n1p1 -i ../jetson-fuses/sym2_t234.key -c ./tools/kernel_flash/flash_l4t_t234_nvme_rootfs_enc.xml -S 900GiB --external-only --append --network usb0 jetson-orin-nano-devkit-super external
+
+For 128GB drive, use 250069680:
+
+sudo ROOTFS_ENC=1 EXT_NUM_SECTORS=250069680 ./tools/kernel_flash/l4t_initrd_flash.sh --showlogs -u ../jetson-fuses/rsa_priv.pem -v ../jetson-fuses/sbk.key --no-flash --external-device nvme1n1p1 -i ../jetson-fuses/sym2_t234.key -c ./tools/kernel_flash/flash_l4t_t234_nvme_rootfs_enc.xml -S 110GiB --external-only --append --network usb0 jetson-orin-nano-devkit-super nvme1n1p1
+
+sudo ROOTFS_ENC=1 EXT_NUM_SECTORS=250069680 ./tools/kernel_flash/l4t_initrd_flash.sh --showlogs -u ../jetson-fuses/rsa_priv.pem -v ../jetson-fuses/sbk.key --uefi-keys uefi_keys/uefi_keys.conf --uefi-enc ../jetson-fuses/sym_t234.key --no-flash --external-device nvme1n1p1 -i ../jetson-fuses/sym2_t234.key -c ./tools/kernel_flash/flash_l4t_t234_nvme_rootfs_enc.xml -S 110GiB --external-only --append --network usb0 jetson-orin-nano-devkit-super nvme1n1p1
+
+sudo ./tools/kernel_flash/l4t_initrd_flash.sh --showlogs -u ../jetson-fuses/rsa_priv.pem -v ../jetson-fuses/sbk.key --network usb0 --flash-only jetson-orin-nano-devkit-super
+
+
+
+sudo ./l4t_initrd_flash.sh --showlogs --no-flash --network usb0 -u ../jetson-fuses/rsa_priv.pem -v ../jetson-fuses/sbk.key -p "-c bootloader/generic/cfg/flash_t234_qspi.xml" jetson-orin-nano-devkit-super internal
+
+
+2147483648 = Full 1TB
+
+1953525168 = 1TB according to fdisk
+
+
